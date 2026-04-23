@@ -38,12 +38,12 @@ def detrend_moving_average(x, window):
     return x - trend
 
 
-def compute_mi(g, detrend_incoming=False, window=51):
+def compute_mi(g, detrend_outgoing=False, window=51):
     incoming = g["incoming"].to_numpy()
     outgoing = g["outgoing"].to_numpy()
 
-    if detrend_incoming:
-        incoming = detrend_moving_average(incoming, window=window)
+    if detrend_outgoing:
+        outgoing = detrend_moving_average(outgoing, window=window)
 
     return ee.mi(incoming, outgoing, k=3)
 
@@ -86,15 +86,15 @@ def main():
     result_base = (
         df[df["regime"].isin(["near", "far"])]
         .groupby(["ensemble", "regime"])
-        .apply(lambda g: compute_mi(g, detrend_incoming=False))
+        .apply(lambda g: compute_mi(g, detrend_outgoing=False))
         .reset_index(name="mi")
     )
 
-    # far, with detrended incoming
+    # far, with detrended outgoing radiation
     result_far_detrended = (
         df[df["regime"] == "far"]
         .groupby("ensemble")
-        .apply(lambda g: compute_mi(g, detrend_incoming=True, window=51))
+        .apply(lambda g: compute_mi(g, detrend_outgoing=True, window=51))
         .reset_index(name="mi")
     )
 
