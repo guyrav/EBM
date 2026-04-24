@@ -8,11 +8,11 @@ from npeet import entropy_estimators as ee
 def read_data(filename):
     data = np.load(filename)
 
-    n_ensemble, n_sample = data[data.files[0]].shape
+    n_sample, n_ensemble = data[data.files[0]].shape
 
     df = pd.DataFrame({
-        "ensemble": np.repeat(np.arange(n_ensemble), n_sample),
-        "sample": np.tile(np.arange(n_sample), n_ensemble),
+        "sample": np.repeat(np.arange(n_sample), n_ensemble),
+        "ensemble": np.tile(np.arange(n_ensemble), n_sample),
     })
 
     for name in data.files:
@@ -69,8 +69,8 @@ def plot_mi(mi_df, ref_value, title, subtitle):
 
 
 def main():
-    sigma = 2
-    rho = 0.6
+    sigma = 1
+    rho = 0.9
     ref_value = -0.5 * np.log2(1 - rho ** 2)
 
     print("Reading data...")
