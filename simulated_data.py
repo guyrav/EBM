@@ -1,64 +1,142 @@
-from typing import Callable
-
 import numpy as np
-import os
+import pandas as pd
+import numba
 
-# def get_ode_temperature_change(T: np.ndarray[np.float64],
-#                                a: Callable,
-#                                out_radiation_coeff: np.float64, out_radiation_intercept: np.float64) -> np.float64:
-#     return a(T) - (out_radiation_coeff * T + out_radiation_intercept)
 
 albedo_threshold = 5
 
-def albedo(T):
-    global albedo_threshold
-    res = np.zeros_like(T)
 
-    res[T > albedo_threshold] = 1.0
-    T_normalised = T / albedo_threshold
-    mask = np.logical_and(0 < T, T < albedo_threshold)
-    res[mask] = 3 * T_normalised[mask]**2 - 2 * T_normalised[mask]**3
+@numba.njit
+def generate_noise_terms(sigma, rho, sqrt_1_minus_rho_sq):
+    x = np.random.randn()
+    y = np.random.randn()
 
-    return res
+    return sigma * x, sigma * (rho * x + sqrt_1_minus_rho_sq * y)
 
-def outgoing_radiation(T):
-    # I know it's unphysical but I can do whatever I want, you're not the boss of me!
-    return np.minimum((T + 1) / (albedo_threshold + 2), np.log(np.maximum(T, 1)))
 
-def generate_noise(num_samples, sample_size, means, sigma_sq, rho):
-    cov = np.array([[sigma_sq, rho * sigma_sq], [rho * sigma_sq, sigma_sq]])
-    samples = np.random.multivariate_normal(means, cov, (num_samples, sample_size))
-    return samples
+@numba.njit
+def albedo_simple(T):
+    if T > albedo_threshold:
+        return 1.0
+    if T < 0:
+        return 0.0
+    else:
+        T_normalised = T / albedo_threshold
+        return 3 * T_normalised**2 - 2 * T_normalised**3
 
-def generate_0d_data(initial_temperature, num_samples, ensemble_size, path):
-    np.random.seed(1995)
 
-    sigma_sq = 2.
-    means = np.zeros((2,), dtype=float)
+@numba.njit
+def outgoing_radiation_linear(T):
+    return (T + 1) / (albedo_threshold + 2)
+
+
+@numba.njit
+def simulate(T0, dt, n_steps, save_every_steps, sigma, rho):
+    sqrt_1_minus_rho_sq = np.sqrt(1 - rho**2)
+    sigma_times_sqrt_dt = sigma * np.sqrt(dt)
+
+    n_ensemble = T0.size
+    n_save = n_steps // save_every_steps + 1
+
+    T = T0.copy()
+    out_T = np.empty((n_save, n_ensemble))
+    out_T[0, :] = T
+    out_incoming = np.empty((n_save, n_ensemble))
+    out_incoming[0, :] = 0
+    out_outgoing = np.empty((n_save, n_ensemble))
+    out_outgoing[0, :] = 0
+    out_noise_incoming = np.empty((n_save, n_ensemble))
+    out_noise_incoming[0, :] = 0
+    out_noise_outgoing = np.empty((n_save, n_ensemble))
+    out_noise_outgoing[0, :] = 0
+
+    sqrt_dt = np.sqrt(dt)
+    save_idx = 1
+
+    incoming_noise_sum = np.zeros(n_ensemble)
+    outgoing_noise_sum = np.zeros(n_ensemble)
+    incoming_sum = np.zeros(n_ensemble)
+    outgoing_sum = np.zeros(n_ensemble)
+
+    for n in range(n_steps):
+        for i in range(n_ensemble):
+            # Compute
+            noise_incoming, noise_outgoing = generate_noise_terms(sigma_times_sqrt_dt, rho, sqrt_1_minus_rho_sq)
+            incoming = dt * albedo_simple(T[i])
+            outgoing = dt * outgoing_radiation_linear(T[i])
+
+            # Accumulate
+            incoming_noise_sum += noise_incoming
+            outgoing_noise_sum += noise_outgoing
+            incoming_sum += incoming
+            outgoing_sum += outgoing
+
+            # Update
+            T[i] += (incoming - outgoing + noise_incoming - noise_outgoing)
+
+        if n % save_every_steps == 0:
+            out_T[save_idx, :] = T
+            out_incoming[save_idx, :] = incoming_sum
+            out_outgoing[save_idx, :] = outgoing_sum
+            out_noise_incoming[save_idx, :] = incoming_noise_sum
+            out_noise_outgoing[save_idx, :] = outgoing_noise_sum
+
+            incoming_sum[:] = 0
+            outgoing_sum[:] = 0
+            incoming_noise_sum[:] = 0
+            outgoing_noise_sum[:] = 0
+
+            save_idx += 1
+
+    return out_T, out_incoming, out_outgoing, out_noise_incoming, out_noise_outgoing
+
+
+def add_data(df, dt, timestamps, T, incoming, outgoing,
+             noise_incoming, noise_outgoing):
+    n_times, n_ensemble = T.shape
+
+    new_df = pd.DataFrame({
+        "T": T.ravel(),
+        "time": np.repeat(timestamps, n_ensemble),
+        "dt": dt,
+        "ensemble": np.tile(np.arange(n_ensemble), n_times),
+        "incoming": incoming.ravel(),
+        "outgoing": outgoing.ravel(),
+        "incoming_noise": noise_incoming.ravel(),
+        "outgoing_noise": noise_outgoing.ravel(),
+    })
+
+    if df is None:
+        return new_df
+
+    return pd.concat([df, new_df], ignore_index=True)
+
+
+
+def main():
+    # Note: for arbitrary dt values we'll need to save by testing "time > n seconds"
+    # and then record also the elapsed time since last save to later normalise the change and noise terms.
+    dts = [1., 1./2, 1./4, 1./8, 1./16, 1./32, 1./64, 1./128, 1./256, 1./512, 1./1024]
+    T0 = np.array([6.])  # Implicit ensemble size of 1
+    total_time = 1000
+    sigma = 1
     rho = 0.6
+    df = None
+    timestamps = np.arange(total_time + 1)
 
-    noise = generate_noise(num_samples, ensemble_size, means, sigma_sq, rho)
+    np.random.seed(1995)
+    for dt in dts:
+        n_steps = int(total_time / dt)
+        save_every_steps = int(1 / dt)
+        print(f"Simulating with dt = {dt}...", end=' ')
+        T, incoming, outgoing, noise_incoming, noise_outgoing = simulate(T0, dt, n_steps, save_every_steps, sigma, rho)
+        print("done.")
+        df = add_data(df, dt, timestamps, T, incoming, outgoing, noise_incoming, noise_outgoing)
 
-    res = np.zeros((num_samples, ensemble_size, 3), dtype=np.float64)
-    res[0, :, 0] = initial_temperature
-    res[0, :, 1] = albedo(res[0, :, 0])
-    res[0, :, 2] = outgoing_radiation(res[0, :, 0])
-    res[0, :, 1:3] += noise[0]
-
-    for i in range(1, num_samples):
-        res[i, :, 0] = res[i - 1, :, 0] + res[i - 1, :, 1] - res[i - 1, :, 2]  # T + incoming_radiation - outgoing_radiation
-        res[i, :, 1] = albedo(res[i, :, 0])
-        res[i, :, 2] = outgoing_radiation(res[i, :, 0])
-        res[i, :, 1:3] += noise[i]
-
-    np.savez(path,
-             T=res[:, :, 0], incoming=res[:, :, 1], outgoing=res[:, :, 2],
-             incoming_noise=noise[:, :, 0], outgoing_noise=noise[:, :, 1])
-
-if __name__ == '__main__':
-    ensemble_size = 1000
-    num_samples = 1000
-    initial_temperature = 1400
-    generate_0d_data(initial_temperature, num_samples, ensemble_size, os.path.join(os.getcwd(), "data"))
+    df["sigma"] = sigma
+    df["rho"] = rho
+    df.to_parquet(f"./data/data_sigma={sigma}_rho={rho}.parquet")
 
 
+if __name__ == "__main__":
+    main()
