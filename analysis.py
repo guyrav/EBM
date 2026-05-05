@@ -1,68 +1,38 @@
 import numpy as np
 import pandas as pd
-from plotnine import ggplot, aes, geom_boxplot, geom_hline, stat_summary, theme_minimal, scale_color_manual, labs, \
-    geom_jitter
+import plotnine as gg
 from npeet import entropy_estimators as ee
 
 
-def read_data(filename):
-    data = np.load(filename)
-
-    n_sample, n_ensemble = data[data.files[0]].shape
-
-    df = pd.DataFrame({
-        "sample": np.repeat(np.arange(n_sample), n_ensemble),
-        "ensemble": np.tile(np.arange(n_ensemble), n_sample),
-    })
-
-    for name in data.files:
-        df[name] = data[name].ravel()
-
-    return df
-
-
-def add_regime_column(df, far_range, near_range):
-    df["regime"] = None
-    df.loc[df["sample"].between(*far_range), "regime"] = "far"
-    df.loc[df["sample"].between(*near_range), "regime"] = "near"
-    return df
-
-
-def detrend_moving_average(x, window):
-    trend = (
-        pd.Series(x)
-        .rolling(window=window, center=True, min_periods=1)
-        .mean()
-        .to_numpy()
+def compute_mi_per_dt(df, column_1="incoming", column_2="outgoing", k=3):
+    # 1. Compute MI for each dt
+    mi_by_dt = (
+        df.groupby("dt")
+        .apply(lambda g: ee.mi(g[column_1].to_numpy(), g[column_2].to_numpy(), k=k))
+        .reset_index(name="mi")
     )
-    return x - trend
+    return mi_by_dt
 
 
-def compute_mi(g, detrend_outgoing=False, window=51):
-    incoming = g["incoming"].to_numpy()
-    outgoing = g["outgoing"].to_numpy()
-
-    if detrend_outgoing:
-        outgoing = detrend_moving_average(outgoing, window=window)
-
-    return ee.mi(incoming, outgoing, k=3)
-
-
-def plot_mi(mi_df, ref_value, title, subtitle):
+def plot_mi_vs_dt(mi_by_dt, subtitle):
+    # 2. Compare each value to the smallest dt
+    dt_min = mi_by_dt["dt"].min()
+    mi_ref = mi_by_dt.loc[mi_by_dt["dt"] == dt_min, "mi"].iloc[0]
+    mi_by_dt["mi_diff"] = mi_by_dt["mi"] - mi_ref
+    mi_by_dt["abs_mi_diff"] = mi_by_dt["mi_diff"].abs()
+    # remove reference row, whose difference is zero
+    mi_diff_df = mi_by_dt[mi_by_dt["dt"] != dt_min].copy()
     p = (
-            ggplot(mi_df, aes(x="regime", y="mi"))
-            + geom_boxplot()
-            + geom_jitter(width=0.1, alpha=0.2)
-            + stat_summary(
-                aes(color='"Mean"'),
-                fun_y=np.mean,
-                geom="point",
-                size=2
+            gg.ggplot(mi_diff_df, gg.aes(x="dt", y="abs_mi_diff"))
+            + gg.geom_point()
+            + gg.geom_line()
+            + gg.scale_x_log10()
+            + gg.scale_y_log10()
+            + gg.labs(
+                x="dt",
+                y="|MI(dt) - MI(dt_min)|",
+                title="Convergence of MI estimate as dt decreases"
             )
-            + scale_color_manual(values={"Mean": "red"})
-            + geom_hline(yintercept=ref_value, linetype="dashed", color="red")
-            + labs(title=title, subtitle=subtitle, x="Regime", y="MI", color="")
-            + theme_minimal()
     )
 
     p.show()
@@ -70,48 +40,20 @@ def plot_mi(mi_df, ref_value, title, subtitle):
 
 def main():
     sigma = 1
-    rho = 0.9
-    ref_value = -0.5 * np.log2(1 - rho ** 2)
+    rho = 0.6
+    # ref_value = -0.5 * np.log2(1 - rho ** 2)
+
+    transient_time_cutoff = 400
 
     print("Reading data...")
-    df = read_data(f"data_sigma={sigma}_rho={rho:.1f}.npz")
-
-    near_range = (0, 250)
-    far_range = (500, 1000)
-
-    df = add_regime_column(df, far_range=far_range, near_range=near_range)
+    df = pd.read_parquet(f"./data/data_sigma={sigma}_rho={rho}.parquet")
 
     print("Computing MI...")
-    # near and far, without detrending
-    result_base = (
-        df[df["regime"].isin(["near", "far"])]
-        .groupby(["ensemble", "regime"])
-        .apply(lambda g: compute_mi(g, detrend_outgoing=False))
-        .reset_index(name="mi")
-    )
-
-    # far, with detrended outgoing radiation
-    result_far_detrended = (
-        df[df["regime"] == "far"]
-        .groupby("ensemble")
-        .apply(lambda g: compute_mi(g, detrend_outgoing=True, window=51))
-        .reset_index(name="mi")
-    )
-
-    result_far_detrended["regime"] = "far_detrended"
-
-    # combine all three
-    result_all = pd.concat([result_base, result_far_detrended], ignore_index=True)
-
-    result_all["regime"] = pd.Categorical(
-        result_all["regime"],
-        categories=["near", "far", "far_detrended"],
-        ordered=True
-    )
+    mi_by_dt = compute_mi_per_dt(df[df["time"] > transient_time_cutoff], k=3)
 
     # boxplot
     print("Plotting...")
-    plot_mi(result_all, ref_value, "MI of incoming heat and outgoing radiation", f"σ={sigma}, ρ={rho:.1f}")
+    plot_mi_vs_dt(mi_by_dt, f"σ={sigma}, ρ={rho:.1f}")
 
 
 if __name__ == "__main__":

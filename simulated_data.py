@@ -141,7 +141,7 @@ def main():
     # and then record also the elapsed time since last save to later normalise the change and noise terms.
     dts = [1., 1./2, 1./4, 1./8, 1./16, 1./32,
            1./64, 1./128, 1./256, 1./512, 1./1024,
-           1./2048, 1./4096, 1./8192]
+           1./2048, 1./4096, 1./8192, 1./16384, 1./32768,]
 
     T0 = np.array([6.])
     total_time = 1000
@@ -158,7 +158,7 @@ def main():
         n_steps = int(round(total_time / dt))
         save_every_steps = int(round(1 / dt))
 
-        print(f"Simulating with dt = {dt}...", end=" ")
+        print(f"Simulating with dt = {dt}, n_steps={n_steps}, save_every_steps={save_every_steps}...", end=" ")
 
         T, incoming, outgoing, noise_incoming, noise_outgoing = simulate(
             T0,
