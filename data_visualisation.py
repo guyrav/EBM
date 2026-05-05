@@ -70,28 +70,28 @@ def plot_ensemble_cloud(df, sigma, rho):
     p.show()
 
 
-def read_data(filename):
-    data = np.load(filename)
+def plot_dt_trajectories(df, subtitle):
+    p = (
+        gg.ggplot(df, gg.aes(x="time", y="T", colour="dt", group="dt"))
+        + gg.geom_line(size=1)
+        + gg.theme_minimal()
+        + gg.labs(
+            title="Temperature trajectory for different values of dt",
+            x="Time",
+            y="Temperature",
+            subtitle=subtitle
+        )
+    )
 
-    n_sample, n_ensemble = data[data.files[0]].shape
-
-    df = pd.DataFrame({
-        "sample": np.repeat(np.arange(n_sample), n_ensemble),
-        "ensemble": np.tile(np.arange(n_ensemble), n_sample),
-    })
-
-    for name in data.files:
-        df[name] = data[name].ravel()
-
-    return df
+    p.show()
 
 
 def main():
-    sigma = 2
+    sigma = 1
     rho = 0.6
 
-    df = read_data(f"data_sigma={sigma}_rho={rho:.1f}.npz")
-    plot_ensemble_cloud(df, sigma, rho)
+    df = pd.read_parquet(f"./data/data_sigma={sigma}_rho={rho:.1f}.parquet")
+    plot_dt_trajectories(df, f"sigma={sigma}_rho={rho:.1f}")
 
 
 if __name__ == "__main__":
