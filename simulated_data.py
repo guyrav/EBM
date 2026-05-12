@@ -1,6 +1,10 @@
+import sys
+import time
+
 import numpy as np
 import pandas as pd
 import numba
+import logging
 
 
 albedo_threshold = 5
@@ -137,13 +141,20 @@ def add_data(df, dt, timestamps, T, incoming, outgoing,
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s",
+        datefmt="%d/%b/%Y %H:%M:%S",
+        stream=sys.stdout)
+
     # Note: for arbitrary dt values we'll need to save by testing "time > n seconds"
     # and then record also the elapsed time since last save to later normalise the change and noise terms.
     dts = [1., 1./2, 1./4, 1./8, 1./16, 1./32,
            1./64, 1./128, 1./256, 1./512, 1./1024,
            1./2048, 1./4096, 1./8192, 1./16384, 1./32768,]
 
-    T0 = np.array([6.])
+    ensemble_size = 100
+    T0 = 6 * np.ones((ensemble_size,), dtype=float)
     total_time = 1000
     sigma = 1
     rho = 0.6
@@ -158,7 +169,8 @@ def main():
         n_steps = int(round(total_time / dt))
         save_every_steps = int(round(1 / dt))
 
-        print(f"Simulating with dt = {dt}, n_steps={n_steps}, save_every_steps={save_every_steps}...", end=" ")
+        logging.info(f"Simulating with dt = {dt}, n_steps={n_steps}, save_every_steps={save_every_steps}...")
+        start = time.time()
 
         T, incoming, outgoing, noise_incoming, noise_outgoing = simulate(
             T0,
@@ -171,7 +183,8 @@ def main():
             seed
         )
 
-        print("done.")
+        end = time.time()
+        logging.info(f"Done in {end - start} seconds")
 
         df = add_data(
             df,
